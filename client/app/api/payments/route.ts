@@ -18,7 +18,7 @@ function getStripeClient() {
     throw ApiErrors.internalError("Stripe is not configured. Please contact support.")
   }
   return new Stripe(apiKey, {
-    apiVersion: "2025-09-30.clover",
+    apiVersion: "2025-11-17.clover",
   })
 }
 
