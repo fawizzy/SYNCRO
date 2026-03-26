@@ -1,18 +1,28 @@
-import logger from '../config/logger';
-import { supabase } from '../config/database';
-import { emailService } from './email-service';
-import { pushService, PushSubscription } from './push-service';
-import { blockchainService } from './blockchain-service';
-import { webhookService } from './webhook-service';
+Searched for "class ReminderEngine"
+Viewed reminder.ts:1-92
+Viewed subscription-service.ts:1-473
+Viewed reminder-engine.ts:1-643
+
+To resolve the merge conflicts in [reminder-engine.ts](cci:7://file:///Users/mac/CALEBUX/backend/src/services/reminder-engine.ts:0:0-0:0), I have integrated the `webhookService` from the `feat/webhook-system` branch with the latest logic from `main`. 
+
+I have standardized the quoting to use double quotes (consistent with `main`) and resolved the field name conflict by sticking with `next_billing_date`—this ensures internal consistency with the existing type definitions and other methods in the class that were not part of the conflict.
+
+```typescript
+import logger from "../config/logger";
+import { supabase } from "../config/database";
+import { emailService } from "./email-service";
+import { pushService, PushSubscription } from "./push-service";
+import { blockchainService } from "./blockchain-service";
+import { webhookService } from "./webhook-service";
 import {
   ReminderSchedule,
   Subscription,
   UserProfile,
   NotificationPayload,
   NotificationDelivery,
-} from '../types/reminder';
-import { calculateBackoffDelay } from '../utils/retry';
-import { userPreferenceService } from './user-preference-service';
+} from "../types/reminder";
+import { calculateBackoffDelay } from "../utils/retry";
+import { userPreferenceService } from "./user-preference-service";
 
 export interface ReminderEngineOptions {
   defaultDaysBefore?: number[];
@@ -32,19 +42,19 @@ export class ReminderEngine {
    * Process pending reminders for a given date
    */
   async processReminders(targetDate: Date = new Date()): Promise<void> {
-    const dateString = targetDate.toISOString().split('T')[0];
+    const dateString = targetDate.toISOString().split("T")[0];
 
     logger.info(`Processing reminders for date: ${dateString}`);
 
     try {
       const { data: reminders, error } = await supabase
-        .from('reminder_schedules')
-        .select('*')
-        .eq('reminder_date', dateString)
-        .eq('status', 'pending');
+        .from("reminder_schedules")
+        .select("*")
+        .eq("reminder_date", dateString)
+        .eq("status", "pending");
 
       if (error) {
-        logger.error('Failed to fetch reminders:', error);
+        logger.error("Failed to fetch reminders:", error);
         throw error;
       }
 
@@ -63,7 +73,7 @@ export class ReminderEngine {
         }
       }
     } catch (error) {
-      logger.error('Error processing reminders:', error);
+      logger.error("Error processing reminders:", error);
       throw error;
     }
   }
@@ -72,27 +82,42 @@ export class ReminderEngine {
    * Process a single reminder
    */
   private async processReminder(reminder: ReminderSchedule): Promise<void> {
-    logger.info(`Processing reminder ${reminder.id} for subscription ${reminder.subscription_id}`);
+    logger.info(
+      `Processing reminder ${reminder.id} for subscription ${reminder.subscription_id}`,
+    );
 
     try {
       const subscription = await this.getSubscription(reminder.subscription_id);
       if (!subscription) {
         logger.warn(`Subscription ${reminder.subscription_id} not found`);
-        await this.markReminderAsFailed(reminder.id, 'Subscription not found');
+        await this.markReminderAsFailed(reminder.id, "Subscription not found");
+        return;
+      }
+
+      if (subscription.status === "paused") {
+        logger.info(
+          `Skipping reminder ${reminder.id} — subscription ${reminder.subscription_id} is paused`,
+        );
+        await supabase
+          .from("reminder_schedules")
+          .update({ status: "skipped", updated_at: new Date().toISOString() })
+          .eq("id", reminder.id);
         return;
       }
 
       const userProfile = await this.getUserProfile(reminder.user_id);
       if (!userProfile) {
         logger.warn(`User profile ${reminder.user_id} not found`);
-        await this.markReminderAsFailed(reminder.id, 'User profile not found');
+        await this.markReminderAsFailed(reminder.id, "User profile not found");
         return;
       }
 
       const renewalDate = subscription.next_billing_date || new Date().toISOString();
       const payload: NotificationPayload = {
         title: `${subscription.name} Renewal Reminder`,
-        body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before > 1 ? 's' : ''}`,
+        body: `${subscription.name} will renew in ${reminder.days_before} day${
+          reminder.days_before > 1 ? "s" : ""
+        }`,
         subscription,
         reminderType: reminder.reminder_type,
         daysBefore: reminder.days_before,
@@ -100,12 +125,12 @@ export class ReminderEngine {
       };
 
       // Dispatch subscription.renewal_due webhook
-      webhookService.dispatchEvent(reminder.user_id, 'subscription.renewal_due', {
+      webhookService.dispatchEvent(reminder.user_id, "subscription.renewal_due", {
         subscription_id: subscription.id,
         days_before: reminder.days_before,
         renewal_date: renewalDate
       }).catch(err => {
-        logger.error('Failed to dispatch subscription.renewal_due webhook:', err);
+        logger.error("Failed to dispatch subscription.renewal_due webhook:", err);
       });
 
       const preferences = await userPreferenceService.getPreferences(reminder.user_id);
@@ -114,11 +139,14 @@ export class ReminderEngine {
       const deliveries: NotificationDelivery[] = [];
 
       // Email delivery
-      if (deliveryChannels.includes('email') && preferences.email_opt_ins.reminders) {
+      if (
+        deliveryChannels.includes("email") &&
+        preferences.email_opt_ins.reminders
+      ) {
         const emailDelivery = await this.createDeliveryRecord(
           reminder.id,
           reminder.user_id,
-          'email',
+          "email",
         );
         deliveries.push(emailDelivery);
 
@@ -130,21 +158,23 @@ export class ReminderEngine {
 
         await this.updateDeliveryRecord(
           emailDelivery.id,
-          emailResult.success ? 'sent' : 'failed',
+          emailResult.success ? "sent" : "failed",
           emailResult.error,
           emailResult.metadata,
-          'email',
+          "email",
         );
       }
 
       // Push delivery — now uses real subscription data
-      if (deliveryChannels.includes('push')) {
-        const pushSubscription = await this.getPushSubscription(reminder.user_id);
+      if (deliveryChannels.includes("push")) {
+        const pushSubscription = await this.getPushSubscription(
+          reminder.user_id,
+        );
         if (pushSubscription) {
           const pushDelivery = await this.createDeliveryRecord(
             reminder.id,
             reminder.user_id,
-            'push',
+            "push",
           );
           deliveries.push(pushDelivery);
 
@@ -156,17 +186,14 @@ export class ReminderEngine {
 
           await this.updateDeliveryRecord(
             pushDelivery.id,
-            pushResult.success ? 'sent' : 'failed',
+            pushResult.success ? "sent" : "failed",
             pushResult.error,
             pushResult.metadata,
-            'push',
+            "push",
           );
 
           // If the push subscription is gone (410/404), clean it up
-          if (
-            !pushResult.success &&
-            pushResult.metadata?.retryable === false
-          ) {
+          if (!pushResult.success && pushResult.metadata?.retryable === false) {
             await this.removeStalePushSubscription(reminder.user_id);
           }
         } else {
@@ -183,16 +210,16 @@ export class ReminderEngine {
       );
 
       const hasSuccess = deliveries.some(
-        (d) => d.status === 'sent' || d.status === 'retrying',
+        (d) => d.status === "sent" || d.status === "retrying",
       );
 
       await supabase
-        .from('reminder_schedules')
+        .from("reminder_schedules")
         .update({
-          status: hasSuccess ? 'sent' : 'failed',
+          status: hasSuccess ? "sent" : "failed",
           updated_at: new Date().toISOString(),
         })
-        .eq('id', reminder.id);
+        .eq("id", reminder.id);
 
       logger.info(`Reminder ${reminder.id} processed successfully`);
     } catch (error) {
@@ -208,23 +235,23 @@ export class ReminderEngine {
   async processRetries(): Promise<void> {
     const now = new Date().toISOString();
 
-    logger.info('Processing delivery retries');
+    logger.info("Processing delivery retries");
 
     try {
       const { data: deliveries, error } = await supabase
-        .from('notification_deliveries')
-        .select('*, reminder_schedules!inner(*)')
-        .eq('status', 'retrying')
-        .lte('next_retry_at', now)
-        .lt('attempt_count', this.maxRetryAttempts);
+        .from("notification_deliveries")
+        .select("*, reminder_schedules!inner(*)")
+        .eq("status", "retrying")
+        .lte("next_retry_at", now)
+        .lt("attempt_count", this.maxRetryAttempts);
 
       if (error) {
-        logger.error('Failed to fetch retry deliveries:', error);
+        logger.error("Failed to fetch retry deliveries:", error);
         throw error;
       }
 
       if (!deliveries || deliveries.length === 0) {
-        logger.info('No deliveries need retry');
+        logger.info("No deliveries need retry");
         return;
       }
 
@@ -233,14 +260,16 @@ export class ReminderEngine {
       for (const delivery of deliveries) {
         try {
           await this.retryDelivery(
-            delivery as NotificationDelivery & { reminder_schedules: ReminderSchedule },
+            delivery as NotificationDelivery & {
+              reminder_schedules: ReminderSchedule;
+            },
           );
         } catch (error) {
           logger.error(`Failed to retry delivery ${delivery.id}:`, error);
         }
       }
     } catch (error) {
-      logger.error('Error processing retries:', error);
+      logger.error("Error processing retries:", error);
       throw error;
     }
   }
@@ -263,75 +292,103 @@ export class ReminderEngine {
       const userProfile = await this.getUserProfile(delivery.user_id);
 
       if (!subscription || !userProfile) {
-        await this.markDeliveryAsFailed(delivery.id, 'Subscription or user not found');
+        await this.markDeliveryAsFailed(
+          delivery.id,
+          "Subscription or user not found",
+        );
         return;
       }
 
       const renewalDate = subscription.next_billing_date || new Date().toISOString();
       const payload: NotificationPayload = {
         title: `${subscription.name} Renewal Reminder`,
-        body: `${subscription.name} will renew in ${reminder.days_before} day${reminder.days_before > 1 ? 's' : ''}`,
+        body: `${subscription.name} will renew in ${reminder.days_before} day${
+          reminder.days_before > 1 ? "s" : ""
+        }`,
         subscription,
         reminderType: reminder.reminder_type,
         daysBefore: reminder.days_before,
         renewalDate,
       };
 
-      let result: { success: boolean; error?: string; metadata?: Record<string, any> };
+      let result: {
+        success: boolean;
+        error?: string;
+        metadata?: Record<string, any>;
+      };
 
-      if (delivery.channel === 'email') {
-        result = await emailService.sendReminderEmail(userProfile.email, payload, {
-          maxAttempts: 1,
-        });
-      } else if (delivery.channel === 'push') {
-        const pushSubscription = await this.getPushSubscription(delivery.user_id);
+      if (delivery.channel === "email") {
+        result = await emailService.sendReminderEmail(
+          userProfile.email,
+          payload,
+          {
+            maxAttempts: 1,
+          },
+        );
+      } else if (delivery.channel === "push") {
+        const pushSubscription = await this.getPushSubscription(
+          delivery.user_id,
+        );
         if (!pushSubscription) {
-          await this.markDeliveryAsFailed(delivery.id, 'Push subscription not found');
+          await this.markDeliveryAsFailed(
+            delivery.id,
+            "Push subscription not found",
+          );
           return;
         }
-        result = await pushService.sendPushNotification(pushSubscription, payload, {
-          maxAttempts: 1,
-        });
+        result = await pushService.sendPushNotification(
+          pushSubscription,
+          payload,
+          {
+            maxAttempts: 1,
+          },
+        );
 
         // Clean up stale subscription on permanent failure
         if (!result.success && result.metadata?.retryable === false) {
           await this.removeStalePushSubscription(delivery.user_id);
         }
       } else {
-        await this.markDeliveryAsFailed(delivery.id, `Unknown channel: ${delivery.channel}`);
+        await this.markDeliveryAsFailed(
+          delivery.id,
+          `Unknown channel: ${delivery.channel}`,
+        );
         return;
       }
 
       if (result.success) {
         await supabase
-          .from('notification_deliveries')
+          .from("notification_deliveries")
           .update({
-            status: 'sent',
+            status: "sent",
             attempt_count: newAttemptCount,
             last_attempt_at: new Date().toISOString(),
             next_retry_at: null,
             error_message: null,
             updated_at: new Date().toISOString(),
           })
-          .eq('id', delivery.id);
+          .eq("id", delivery.id);
       } else {
         const delay = calculateBackoffDelay(newAttemptCount);
         const nextRetryAt = new Date(Date.now() + delay);
 
         if (newAttemptCount >= this.maxRetryAttempts) {
-          await this.markDeliveryAsFailed(delivery.id, result.error || 'Max attempts reached');
+          await this.markDeliveryAsFailed(
+            delivery.id,
+            result.error || "Max attempts reached",
+          );
         } else {
           await supabase
-            .from('notification_deliveries')
+            .from("notification_deliveries")
             .update({
-              status: 'retrying',
+              status: "retrying",
               attempt_count: newAttemptCount,
               last_attempt_at: new Date().toISOString(),
               next_retry_at: nextRetryAt.toISOString(),
               error_message: result.error || null,
               updated_at: new Date().toISOString(),
             })
-            .eq('id', delivery.id);
+            .eq("id", delivery.id);
         }
       }
     } catch (error) {
@@ -343,33 +400,41 @@ export class ReminderEngine {
   /**
    * Schedule reminders for subscriptions with upcoming renewals
    */
-  async scheduleReminders(daysBefore: number[] = this.defaultDaysBefore): Promise<void> {
-    logger.info(`Scheduling reminders for days before: ${daysBefore.join(', ')}`);
+  async scheduleReminders(
+    daysBefore: number[] = this.defaultDaysBefore,
+  ): Promise<void> {
+    logger.info(
+      `Scheduling reminders for days before: ${daysBefore.join(", ")}`,
+    );
 
     try {
       const { data: subscriptions, error } = await supabase
-        .from('subscriptions')
-        .select('*')
-        .eq('status', 'active')
-        .not('next_billing_date', 'is', null)
-        .gt('next_billing_date', new Date().toISOString());
+        .from("subscriptions")
+        .select("*")
+        .in("status", ["active"])
+        .not("next_billing_date", "is", null)
+        .gt("next_billing_date", new Date().toISOString());
 
       if (error) {
-        logger.error('Failed to fetch subscriptions:', error);
+        logger.error("Failed to fetch subscriptions:", error);
         throw error;
       }
 
       if (!subscriptions || subscriptions.length === 0) {
-        logger.info('No active subscriptions with future renewal dates');
+        logger.info("No active subscriptions with future renewal dates");
         return;
       }
 
-      logger.info(`Found ${subscriptions.length} subscriptions to schedule reminders for`);
+      logger.info(
+        `Found ${subscriptions.length} subscriptions to schedule reminders for`,
+      );
 
       for (const subscription of subscriptions) {
         if (!subscription.next_billing_date) continue;
 
-        const preferences = await userPreferenceService.getPreferences(subscription.user_id);
+        const preferences = await userPreferenceService.getPreferences(
+          subscription.user_id,
+        );
         const userDaysBefore = preferences.reminder_timing;
 
         const renewalDate = new Date(subscription.next_billing_date);
@@ -383,21 +448,21 @@ export class ReminderEngine {
 
           if (reminderDate >= today) {
             const { data: existing } = await supabase
-              .from('reminder_schedules')
-              .select('id')
-              .eq('subscription_id', subscription.id)
-              .eq('days_before', days)
-              .eq('status', 'pending')
+              .from("reminder_schedules")
+              .select("id")
+              .eq("subscription_id", subscription.id)
+              .eq("days_before", days)
+              .eq("status", "pending")
               .single();
 
             if (!existing) {
-              await supabase.from('reminder_schedules').insert({
+              await supabase.from("reminder_schedules").insert({
                 subscription_id: subscription.id,
                 user_id: subscription.user_id,
-                reminder_date: reminderDate.toISOString().split('T')[0],
-                reminder_type: 'renewal',
+                reminder_date: reminderDate.toISOString().split("T")[0],
+                reminder_type: "renewal",
                 days_before: days,
-                status: 'pending',
+                status: "pending",
               });
 
               logger.debug(
@@ -408,9 +473,9 @@ export class ReminderEngine {
         }
       }
 
-      logger.info('Reminder scheduling completed');
+      logger.info("Reminder scheduling completed");
     } catch (error) {
-      logger.error('Error scheduling reminders:', error);
+      logger.error("Error scheduling reminders:", error);
       throw error;
     }
   }
@@ -421,9 +486,9 @@ export class ReminderEngine {
 
   private async getSubscription(id: string): Promise<Subscription | null> {
     const { data, error } = await supabase
-      .from('subscriptions')
-      .select('*')
-      .eq('id', id)
+      .from("subscriptions")
+      .select("*")
+      .eq("id", id)
       .single();
 
     if (error || !data) return null;
@@ -432,29 +497,33 @@ export class ReminderEngine {
 
   private async getUserProfile(userId: string): Promise<UserProfile | null> {
     const { data, error } = await supabase
-      .from('profiles')
-      .select('*')
-      .eq('id', userId)
+      .from("profiles")
+      .select("*")
+      .eq("id", userId)
       .single();
 
     if (error || !data) return null;
 
-    let email = data.email || '';
+    let email = data.email || "";
     try {
-      const { data: authUser, error: authError } = await supabase.auth.admin.getUserById(userId);
+      const { data: authUser, error: authError } =
+        await supabase.auth.admin.getUserById(userId);
       if (!authError && authUser?.user?.email) {
         email = authUser.user.email;
       }
     } catch (authErr) {
-      logger.warn(`Could not fetch email from auth.users for user ${userId}:`, authErr);
+      logger.warn(
+        `Could not fetch email from auth.users for user ${userId}:`,
+        authErr,
+      );
     }
 
     if (!email) {
       const { data: emailAccount } = await supabase
-        .from('email_accounts')
-        .select('email')
-        .eq('user_id', userId)
-        .eq('is_connected', true)
+        .from("email_accounts")
+        .select("email")
+        .eq("user_id", userId)
+        .eq("is_connected", true)
         .limit(1)
         .single();
 
@@ -472,8 +541,8 @@ export class ReminderEngine {
       id: data.id,
       email,
       full_name: data.full_name || data.display_name || null,
-      timezone: data.timezone || 'UTC',
-      currency: data.currency || 'USD',
+      timezone: data.timezone || "UTC",
+      currency: data.currency || "USD",
     };
   }
 
@@ -481,22 +550,27 @@ export class ReminderEngine {
    * Fetch the most recently created push subscription for a user.
    * Returns null if the user has no active push subscription in the database.
    */
-  private async getPushSubscription(userId: string): Promise<PushSubscription | null> {
+  private async getPushSubscription(
+    userId: string,
+  ): Promise<PushSubscription | null> {
     try {
       const { data, error } = await supabase
-        .from('push_subscriptions')
-        .select('endpoint, p256dh, auth')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false })
+        .from("push_subscriptions")
+        .select("endpoint, p256dh, auth")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
         .limit(1)
         .single();
 
       if (error) {
         // PGRST116 = no rows returned — user simply hasn't subscribed yet
-        if (error.code === 'PGRST116') {
+        if (error.code === "PGRST116") {
           return null;
         }
-        logger.error(`Error fetching push subscription for user ${userId}:`, error);
+        logger.error(
+          `Error fetching push subscription for user ${userId}:`,
+          error,
+        );
         return null;
       }
 
@@ -510,7 +584,10 @@ export class ReminderEngine {
         },
       };
     } catch (err) {
-      logger.error(`Unexpected error fetching push subscription for user ${userId}:`, err);
+      logger.error(
+        `Unexpected error fetching push subscription for user ${userId}:`,
+        err,
+      );
       return null;
     }
   }
@@ -522,32 +599,38 @@ export class ReminderEngine {
   private async removeStalePushSubscription(userId: string): Promise<void> {
     try {
       const { error } = await supabase
-        .from('push_subscriptions')
+        .from("push_subscriptions")
         .delete()
-        .eq('user_id', userId);
+        .eq("user_id", userId);
 
       if (error) {
-        logger.warn(`Failed to remove stale push subscriptions for user ${userId}:`, error);
+        logger.warn(
+          `Failed to remove stale push subscriptions for user ${userId}:`,
+          error,
+        );
       } else {
         logger.info(`Removed stale push subscriptions for user ${userId}`);
       }
     } catch (err) {
-      logger.warn(`Unexpected error removing stale push subscription for user ${userId}:`, err);
+      logger.warn(
+        `Unexpected error removing stale push subscription for user ${userId}:`,
+        err,
+      );
     }
   }
 
   private async createDeliveryRecord(
     reminderScheduleId: string,
     userId: string,
-    channel: 'email' | 'push',
+    channel: "email" | "push",
   ): Promise<NotificationDelivery> {
     const { data, error } = await supabase
-      .from('notification_deliveries')
+      .from("notification_deliveries")
       .insert({
         reminder_schedule_id: reminderScheduleId,
         user_id: userId,
         channel,
-        status: 'pending',
+        status: "pending",
         attempt_count: 0,
         max_attempts: this.maxRetryAttempts,
       })
@@ -560,10 +643,10 @@ export class ReminderEngine {
 
   private async updateDeliveryRecord(
     deliveryId: string,
-    status: 'sent' | 'failed' | 'retrying',
+    status: "sent" | "failed" | "retrying",
     errorMessage: string | undefined,
     metadata: Record<string, any> | undefined,
-    channel: 'email' | 'push',
+    channel: "email" | "push",
   ): Promise<void> {
     const updateData: any = {
       status,
@@ -580,33 +663,33 @@ export class ReminderEngine {
       updateData.metadata = metadata;
     }
 
-    if (status === 'retrying') {
+    if (status === "retrying") {
       const delay = calculateBackoffDelay(1);
       updateData.next_retry_at = new Date(Date.now() + delay).toISOString();
     }
 
     const { error } = await supabase
-      .from('notification_deliveries')
+      .from("notification_deliveries")
       .update(updateData)
-      .eq('id', deliveryId);
+      .eq("id", deliveryId);
 
     if (error) throw error;
 
     // Dispatch reminder.sent webhook if status is sent
-    if (status === 'sent') {
+    if (status === "sent") {
       const { data: delivery } = await supabase
-        .from('notification_deliveries')
-        .select('user_id, reminder_schedule_id')
-        .eq('id', deliveryId)
+        .from("notification_deliveries")
+        .select("user_id, reminder_schedule_id")
+        .eq("id", deliveryId)
         .single();
 
       if (delivery) {
-        webhookService.dispatchEvent(delivery.user_id, 'reminder.sent', {
+        webhookService.dispatchEvent(delivery.user_id, "reminder.sent", {
           delivery_id: deliveryId,
           reminder_schedule_id: delivery.reminder_schedule_id,
           channel
         }).catch(err => {
-          logger.error('Failed to dispatch reminder.sent webhook:', err);
+          logger.error("Failed to dispatch reminder.sent webhook:", err);
         });
       }
     }
@@ -617,13 +700,13 @@ export class ReminderEngine {
     errorMessage: string,
   ): Promise<void> {
     await supabase
-      .from('notification_deliveries')
+      .from("notification_deliveries")
       .update({
-        status: 'failed',
+        status: "failed",
         error_message: errorMessage,
         updated_at: new Date().toISOString(),
       })
-      .eq('id', deliveryId);
+      .eq("id", deliveryId);
   }
 
   private async markReminderAsFailed(
@@ -631,13 +714,14 @@ export class ReminderEngine {
     errorMessage: string,
   ): Promise<void> {
     await supabase
-      .from('reminder_schedules')
+      .from("reminder_schedules")
       .update({
-        status: 'failed',
+        status: "failed",
         updated_at: new Date().toISOString(),
       })
-      .eq('id', reminderId);
+      .eq("id", reminderId);
   }
 }
 
 export const reminderEngine = new ReminderEngine();
+```

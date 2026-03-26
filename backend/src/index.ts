@@ -20,6 +20,7 @@ import { monitoringService } from './services/monitoring-service';
 import { healthService } from './services/health-service';
 import { eventListener } from './services/event-listener';
 import { expiryService } from './services/expiry-service';
+import { scheduleAutoResume } from './jobs/auto-resume';
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -192,7 +193,11 @@ const server = app.listen(PORT, () => {
   eventListener.start().catch(err => {
     logger.error('Failed to start event listener:', err);
   });
+
+  scheduleAutoResume();
 });
+
+
 
 // Graceful shutdown
 process.on('SIGTERM', () => {
